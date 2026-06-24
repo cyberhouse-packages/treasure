@@ -1,0 +1,65 @@
+// Treasure – Erinnerungssteine
+// Datenmodell laut Projektplan: stones, recordings, box_devices
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // Laufzeit: gepoolt (Supabase 6543/pgbouncer)
+  directUrl = env("DIRECT_URL") // Migrationen: Direktverbindung (Supabase 5432)
+}
+
+enum StoneStatus {
+  empty // noch keine Aufnahme
+  recorded // Entwurf vorhanden, überschreibbar
+  confirmed // bestätigt, unveränderlich
+}
+
+enum RecordingState {
+  draft
+  confirmed
+}
+
+model Stone {
+  id        String      @id // ULID
+  tagUid    String?     @unique @map("tag_uid") // NFC/RFID Chip-UID, beim Pairing gesetzt
+  qrToken   String      @unique @map("qr_token") // langer Zufallswert für QR-URL
+  status    StoneStatus @default(empty)
+  label     String? // optionale interne Bezeichnung
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  recordings Recording[]
+
+  @@map("stones")
+}
+
+model Recording {
+  id          String         @id // ULID
+  stoneId     String         @map("stone_id")
+  storageKey  String         @map("storage_key") // S3 Object Key bzw. Blob-Pfad
+  publicUrl   String?        @map("public_url") // öffentlicher Blob-URL (Vercel Blob), null bei S3
+  durationMs  Int            @map("duration_ms") // <= 120000, serverseitig validiert
+  mime        String // z.B. audio/webm
+  sizeBytes   Int?           @map("size_bytes")
+  state       RecordingState @default(draft)
+  confirmedAt DateTime?      @map("confirmed_at")
+  createdAt   DateTime       @default(now()) @map("created_at")
+
+  stone Stone @relation(fields: [stoneId], references: [id], onDelete: Cascade)
+
+  @@index([stoneId])
+  @@map("recordings")
+}
+
+model BoxDevice {
+  id          String    @id // ULID
+  deviceToken String    @unique @map("device_token") // Auth-Secret pro Box (gehasht speichern in Prod)
+  label       String?
+  lastSeenAt  DateTime? @map("last_seen_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  @@map("box_devices")
+}

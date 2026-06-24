@@ -1,0 +1,60 @@
+# Lokale Testumgebung: Postgres (DB) + MinIO (S3-kompatibler Storage).
+# Start:  docker compose up -d
+# Stop:   docker compose down        (Daten bleiben in Volumes erhalten)
+# Reset:  docker compose down -v      (löscht auch die Daten)
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: treasure
+    ports:
+      # Host-Port 5433, da auf 5432 bereits ein nativer Postgres läuft.
+      - "5433:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+      # CORS für presigned Browser-Uploads/-Downloads (nur lokal!)
+      MINIO_API_CORS_ALLOW_ORIGIN: "*"
+    ports:
+      - "9000:9000" # S3 API
+      - "9001:9001" # Web-Konsole: http://localhost:9001 (minioadmin/minioadmin)
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Einmal-Container: legt den Bucket an und setzt eine CORS-Regel.
+  createbuckets:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin;
+      mc mb --ignore-existing local/treasure-audio;
+      echo 'Bucket treasure-audio bereit.';
+      "
+
+volumes:
+  db_data:
+  minio_data:
