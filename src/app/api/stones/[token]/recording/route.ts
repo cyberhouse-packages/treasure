@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { findStoneByToken } from "@/lib/stoneRepo";
 import { canRecord, isDurationValid, type StoneStatus } from "@/lib/stoneRules";
 import { newId } from "@/lib/ids";
-import { audioKey, putAudio, deleteAudio } from "@/lib/storage";
+import { audioKey, putAudio, deleteAudio, storageDriver } from "@/lib/storage";
 import { ALLOWED_AUDIO_MIME, MAX_UPLOAD_BYTES } from "@/lib/constants";
 
 // Nimmt die Audiodaten direkt entgegen (Binary-Body), legt sie im Storage ab und
@@ -50,27 +50,39 @@ export async function POST(
 
   const recordingId = newId();
   const key = audioKey(stone.id, recordingId);
-  const saved = await putAudio(key, buf, contentType);
+  try {
+    const saved = await putAudio(key, buf, contentType);
 
-  await prisma.$transaction([
-    prisma.recording.deleteMany({ where: { stoneId: stone.id, state: "draft" } }),
-    prisma.recording.create({
-      data: {
-        id: recordingId,
-        stoneId: stone.id,
-        storageKey: saved.key,
-        publicUrl: saved.url,
-        durationMs,
-        mime: contentType,
-        sizeBytes: saved.sizeBytes,
-        state: "draft",
-      },
-    }),
-    prisma.stone.update({
-      where: { id: stone.id },
-      data: { status: "recorded" },
-    }),
-  ]);
+    await prisma.$transaction([
+      prisma.recording.deleteMany({
+        where: { stoneId: stone.id, state: "draft" },
+      }),
+      prisma.recording.create({
+        data: {
+          id: recordingId,
+          stoneId: stone.id,
+          storageKey: saved.key,
+          publicUrl: saved.url,
+          durationMs,
+          mime: contentType,
+          sizeBytes: saved.sizeBytes,
+          state: "draft",
+        },
+      }),
+      prisma.stone.update({
+        where: { id: stone.id },
+        data: { status: "recorded" },
+      }),
+    ]);
+  } catch (e) {
+    // Klarer Fehler statt generischem 500, damit Speicherprobleme sichtbar werden.
+    const detail = e instanceof Error ? e.message : String(e);
+    console.error("recording save failed:", detail);
+    return NextResponse.json(
+      { error: "save_failed", driver: storageDriver(), detail },
+      { status: 500 },
+    );
+  }
 
   // Alte Storage-Objekte erst nach erfolgreichem DB-Update entfernen (best effort).
   await Promise.all(
