@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { findStoneByToken, latestRecording } from "@/lib/stoneRepo";
-import { playbackUrl } from "@/lib/storage";
 
 // Liefert eine kurzlebige signierte Audio-URL für die QR-Wiedergabe.
 // Nur für bestätigte Steine; Entwürfe werden hier nicht ausgeliefert.
@@ -23,9 +22,10 @@ export async function GET(
     return NextResponse.json({ error: "no_recording" }, { status: 404 });
   }
 
-  const url = await playbackUrl({
-    storageKey: rec.storageKey,
-    publicUrl: rec.publicUrl,
+  // Wiedergabe läuft über die gated Audio-Stream-Route (privater Storage).
+  return NextResponse.json({
+    url: `/api/stones/${token}/audio`,
+    mime: rec.mime,
+    durationMs: rec.durationMs,
   });
-  return NextResponse.json({ url, mime: rec.mime, durationMs: rec.durationMs });
 }

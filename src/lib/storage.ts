@@ -12,7 +12,7 @@ import {
   DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { put as blobPut, del as blobDel } from "@vercel/blob";
+import { put as blobPut, del as blobDel, get as blobGet } from "@vercel/blob";
 import { env } from "./env";
 
 export type StorageDriver = "s3" | "blob";
@@ -61,13 +61,14 @@ export async function putAudio(
   contentType: string,
 ): Promise<SavedAudio> {
   if (storageDriver() === "blob") {
+    // Private Blobs: kein öffentlicher URL; Wiedergabe läuft über die gated Audio-Route.
     const res = await blobPut(key, data, {
-      access: "public",
+      access: "private",
       contentType,
       addRandomSuffix: false,
       token: process.env.BLOB_READ_WRITE_TOKEN,
     });
-    return { key: res.pathname, url: res.url, sizeBytes: data.byteLength };
+    return { key: res.pathname, url: null, sizeBytes: data.byteLength };
   }
   await s3().send(
     new PutObjectCommand({
@@ -83,11 +84,7 @@ export async function putAudio(
 /** Löscht eine Aufnahme aus dem Storage. */
 export async function deleteAudio(ref: StoredRef): Promise<void> {
   if (storageDriver() === "blob") {
-    if (ref.publicUrl) {
-      await blobDel(ref.publicUrl, {
-        token: process.env.BLOB_READ_WRITE_TOKEN,
-      });
-    }
+    await blobDel(ref.storageKey, { token: process.env.BLOB_READ_WRITE_TOKEN });
     return;
   }
   await s3().send(
@@ -95,15 +92,32 @@ export async function deleteAudio(ref: StoredRef): Promise<void> {
   );
 }
 
-/** Liefert eine abspielbare URL: öffentlicher Blob-URL bzw. kurzlebig signierter S3-URL. */
-export async function playbackUrl(ref: StoredRef): Promise<string> {
+export type AudioResult =
+  | { kind: "stream"; stream: ReadableStream; contentType?: string }
+  | { kind: "redirect"; url: string };
+
+/**
+ * Liefert die Audiodaten zum Ausspielen:
+ *  - blob: privater Server-Stream (über unsere gated Route weitergereicht)
+ *  - s3:   kurzlebig signierte URL (Redirect)
+ */
+export async function fetchAudio(ref: StoredRef): Promise<AudioResult> {
   if (storageDriver() === "blob") {
-    if (!ref.publicUrl) throw new Error("Blob-URL fehlt");
-    return ref.publicUrl;
+    const res = await blobGet(ref.storageKey, {
+      access: "private",
+      token: process.env.BLOB_READ_WRITE_TOKEN,
+    });
+    if (!res || !res.stream) throw new Error("Blob nicht gefunden");
+    return {
+      kind: "stream",
+      stream: res.stream,
+      contentType: res.headers?.get("content-type") ?? undefined,
+    };
   }
-  return getSignedUrl(
+  const url = await getSignedUrl(
     s3(),
     new GetObjectCommand({ Bucket: env.s3.bucket(), Key: ref.storageKey }),
     { expiresIn: env.signedUrlTtlSeconds },
   );
+  return { kind: "redirect", url };
 }

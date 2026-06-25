@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { findStoneByTagUid, latestRecording } from "@/lib/stoneRepo";
-import { playbackUrl } from "@/lib/storage";
+import { env } from "@/lib/env";
 
 const Body = z.object({
   tagUid: z.string().min(1),
@@ -49,9 +49,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "empty" }, { status: 409 });
   }
 
-  const url = await playbackUrl({
-    storageKey: rec.storageKey,
-    publicUrl: rec.publicUrl,
-  });
+  // Absolute URL zur gated Audio-Stream-Route (die Box streamt diese direkt).
+  const url = `${env.appBaseUrl}/api/stones/${stone.qrToken}/audio`;
   return NextResponse.json({ url, mime: rec.mime, durationMs: rec.durationMs });
 }
